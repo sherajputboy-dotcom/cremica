@@ -505,7 +505,7 @@ async def document_file_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ----------------------------------------------------------------------
 # Main Application Launcher
-def main():
+async def main_async():
     if not BOT_TOKEN:
         logger.error("❌ BOT_TOKEN environment variable not found! Exiting.")
         sys.exit(1)
@@ -524,6 +524,7 @@ def main():
             WAITING_SINGLE_OTP: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_single_otp)],
         },
         fallbacks=[CommandHandler("cancel", cancel_flow)],
+        per_message=False,
     )
 
     batch_conv = ConversationHandler(
@@ -535,6 +536,7 @@ def main():
             WAITING_BATCH_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_new_batch)],
         },
         fallbacks=[CommandHandler("cancel", cancel_flow)],
+        per_message=False,
     )
 
     # Register handlers
@@ -550,15 +552,42 @@ def main():
     application.add_handler(MessageHandler(filters.Document.ALL, document_file_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
 
-    # Event loop setup for concurrent Telegram bot polling & keep-alive web server
-    loop = asyncio.get_event_loop()
+    # Initialize Telegram Application & Start Polling
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(drop_pending_updates=True)
 
-    # Schedule Web Server
-    loop.create_task(start_web_server())
+    # Start aiohttp Web Server for Render 24/7 Keep-Alive
+    app = web.Application()
+    app.router.add_get("/", handle_root)
+    app.router.add_get("/health", handle_health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
 
-    logger.info("🚀 Cremica Telegram Bot is starting polling...")
-    application.run_polling(drop_pending_updates=True)
+    logger.info(f"🌐 Keep-alive Web Server listening on port {PORT}")
+    logger.info("🚀 Cremica Telegram Bot is active and polling...")
+
+    # Keep server running asynchronously
+    stop_event = asyncio.Event()
+    try:
+        await stop_event.wait()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        logger.info("Stopping bot and web server...")
+        await site.stop()
+        await runner.cleanup()
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+
+
+def main():
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":
     main()
+
