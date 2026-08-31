@@ -400,9 +400,19 @@ async def handle_panel_processing(update: Update, context: ContextTypes.DEFAULT_
         f"🔄 <b>Scanning {len(panel_urls)} Firebase Panel(s)...</b>\nFetching connected online devices..."
     )
 
+    loop = asyncio.get_running_loop()
     all_jobs = []
     for idx, fb_url in enumerate(panel_urls, 1):
-        devices = core.fetch_devices_and_phones(fb_url)
+        if len(panel_urls) > 1:
+            try:
+                await status_msg.edit_text(
+                    f"🔄 <b>Scanning Panel ({idx}/{len(panel_urls)})...</b>\n<code>{fb_url}</code>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+        devices = await loop.run_in_executor(None, lambda u=fb_url: core.fetch_devices_and_phones(u))
         for dev in devices:
             phone = dev["phone"]
             name = core.random_indian_name()
@@ -411,7 +421,8 @@ async def handle_panel_processing(update: Update, context: ContextTypes.DEFAULT_
 
     if not all_jobs:
         await status_msg.edit_text(
-            "⚠️ <b>No online devices with numbers found in the provided Firebase panels.</b>",
+            "⚠️ <b>No online devices with numbers found in the provided Firebase panel(s).</b>\n"
+            "Please check if the Firebase link is active or contains connected devices.",
             parse_mode="HTML",
             reply_markup=build_menu_keyboard(),
         )

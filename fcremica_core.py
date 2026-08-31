@@ -264,19 +264,27 @@ def fetch_devices_and_phones(firebase_url):
     clients_data = {}
     messages_data = {}
 
-    try:
-        m_req = requests.get(firebase_url.rstrip("/") + "/messages.json", timeout=15)
-        if m_req.status_code == 200:
-            messages_data = m_req.json() or {}
-    except Exception as e:
-        print(f"  [WARN] Error fetching messages.json: {e}")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+    }
 
-    try:
-        c_req = requests.get(firebase_url.rstrip("/") + "/clients.json", timeout=15)
-        if c_req.status_code == 200:
-            clients_data = c_req.json() or {}
-    except Exception as e:
-        print(f"  [WARN] Error fetching clients.json: {e}")
+    def fetch_node(endpoint):
+        try:
+            url = firebase_url.rstrip("/") + f"/{endpoint}.json"
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code == 200:
+                return resp.json() or {}
+        except Exception as e:
+            print(f"  [WARN] Error fetching {endpoint}.json: {e}")
+        return {}
+
+    # Fetch clients.json and messages.json in parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f_messages = executor.submit(fetch_node, "messages")
+        f_clients = executor.submit(fetch_node, "clients")
+        messages_data = f_messages.result()
+        clients_data = f_clients.result()
 
     seen_phones = set()
     result = []
