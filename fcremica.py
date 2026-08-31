@@ -7,6 +7,15 @@ Runs without Telegram bot directly in terminal.
 import sys
 import os
 import requests
+
+# Fix Windows console UTF-8 output encoding error
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import fcremica_core as core
 
 def run_firebase_panels(input_source, is_single=False, workers=5, batch_code="CD06G26"):
@@ -19,7 +28,7 @@ def run_firebase_panels(input_source, is_single=False, workers=5, batch_code="CD
         lines = [line.strip() for line in input_source.replace(",", "\n").splitlines() if line.strip()]
 
     if is_single and len(lines) > 1:
-        lines = lines[:1]  # Restrict to single link if single panel mode selected
+        lines = lines[:1]
 
     panel_urls = []
     for line in lines:
