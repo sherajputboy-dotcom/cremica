@@ -356,6 +356,58 @@ def log_result(phone, name, state, batch_code, status, details=""):
             )
 
 
+def write_summary_report(results, batch_code="CD06G26", log_file=LOG_FILE):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    successes = [r for r in results if r.get("status") == "success"]
+    failures = [r for r in results if r.get("status") != "success"]
+
+    lines = []
+    lines.append("=" * 80)
+    lines.append("                     CREMICA CAMPAIGN EXECUTION REPORT")
+    lines.append("=" * 80)
+    lines.append(f"Timestamp: {timestamp}")
+    lines.append(f"Batch Code: {batch_code}")
+    lines.append(f"Total Processed: {len(results)} | Successes: {len(successes)} | Failures: {len(failures)}")
+    lines.append("")
+
+    lines.append("=" * 80)
+    lines.append(f"✅ SUCCESSFUL REGISTRATIONS ({len(successes)})")
+    lines.append("=" * 80)
+    if successes:
+        for idx, item in enumerate(successes, 1):
+            phone = item.get("phone", "")
+            name = item.get("name", "")
+            state = item.get("state", "")
+            details = item.get("details", "Complete")
+            lines.append(f"{idx}. Phone: {phone} | Name: {name} | State: {state} | Details: {details}")
+    else:
+        lines.append("No successful registrations in this run.")
+
+    lines.append("")
+    lines.append("=" * 80)
+    lines.append(f"❌ FAILED REGISTRATIONS ({len(failures)})")
+    lines.append("=" * 80)
+    if failures:
+        for idx, item in enumerate(failures, 1):
+            phone = item.get("phone", "")
+            name = item.get("name", "")
+            state = item.get("state", "")
+            status = item.get("status", "Failed")
+            details = item.get("details", "")
+            lines.append(f"{idx}. Phone: {phone} | Name: {name} | State: {state} | Status: {status} | Reason: {details}")
+    else:
+        lines.append("No failed registrations in this run.")
+
+    lines.append("=" * 80)
+    content = NL.join(lines) + NL
+
+    with _log_lock:
+        with open(log_file, "w", encoding="utf-8") as fh:
+            fh.write(content)
+
+    return content
+
+
 # ----------------------------------------------------------------------
 # Single Number Execution
 def process_number(phone, name, state, batch_code,
