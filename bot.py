@@ -12,6 +12,9 @@ Features:
 
 import os
 import sys
+import re
+import html
+import traceback
 import asyncio
 import logging
 from aiohttp import web
@@ -503,6 +506,22 @@ async def document_file_handler(update: Update, context: ContextTypes.DEFAULT_TY
     await handle_panel_processing(update, context, lines)
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Exception while handling an update:", exc_info=context.error)
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = "".join(tb_list)
+    err_text = html.escape(str(context.error))
+    message = (
+        f"⚠️ <b>An error occurred while processing request:</b>\n"
+        f"<code>{err_text}</code>"
+    )
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_html(message)
+        except Exception:
+            pass
+
+
 # ----------------------------------------------------------------------
 # Main Application Launcher
 async def main_async():
@@ -539,7 +558,7 @@ async def main_async():
         per_message=False,
     )
 
-    # Register handlers
+    # Register handlers & error handler
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("menu", start_command))
     application.add_handler(CommandHandler("help", help_command))
@@ -551,6 +570,7 @@ async def main_async():
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.Document.ALL, document_file_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
+    application.add_error_handler(error_handler)
 
     # Initialize Telegram Application & Start Polling
     await application.initialize()
