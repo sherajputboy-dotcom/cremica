@@ -13,7 +13,6 @@ import requests
 import base64
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Fix Windows console UTF-8 output encoding
 if sys.platform == "win32":
@@ -27,9 +26,9 @@ RESULTS_FILE = "cremica_results.txt"
 PANELS_FILE = "panels.txt"
 WINNERS_FILE = "cremica_winners.txt"
 
-WINNER_KEYWORDS = [
-    "winner", "won", "congratulat", "congrats", "reward", "backpack",
-    "fastrack", "sony", "ps5", "voucher", "claim", "gift", "prize"
+# Keywords for Cremica Bector Foods Promo Winners
+CREMICA_KEYWORDS = [
+    "bector foods", "back to school promo", "cremica", "woohoo.in/redemption", "pinelabs", "bourbonsupport"
 ]
 
 def parse_firebase_link(link: str):
@@ -84,13 +83,14 @@ def fetch_panel_data(panel_url):
     return messages
 
 def check_winners_on_panels(panel_urls, target_numbers=None):
-    print(f"\n🔍 Scanning {len(panel_urls)} Firebase panel(s) for winner messages...")
+    print(f"\n🔍 Scanning {len(panel_urls)} Firebase panel(s) for Cremica Winner SMS...")
     if target_numbers:
-        print(f"📌 Checking against {len(target_numbers)} registered number(s).")
+        print(f"📌 Checking across {len(target_numbers)} registered number(s).")
     else:
-        print("📌 Checking ALL messages across panels for winner keywords.")
+        print("📌 Checking ALL messages across panels for Cremica Winner SMS.")
 
     winners_found = []
+    seen_signatures = set()
 
     for idx, panel_url in enumerate(panel_urls, 1):
         print(f"\nScanning Panel ({idx}/{len(panel_urls)}): {panel_url}")
@@ -120,9 +120,9 @@ def check_winners_on_panels(panel_urls, target_numbers=None):
                     continue
 
                 lower_body = body.lower()
-                is_winner_msg = any(kw in lower_body for kw in WINNER_KEYWORDS)
+                is_cremica_winner = any(kw in lower_body for kw in CREMICA_KEYWORDS)
 
-                if is_winner_msg:
+                if is_cremica_winner:
                     msg_phone = phone_found
                     phone_match = re.search(r"\b([6-9]\d{9})\b", body)
                     if phone_match:
@@ -139,6 +139,11 @@ def check_winners_on_panels(panel_urls, target_numbers=None):
                     except Exception:
                         pass
 
+                    sig = f"{msg_phone}_{timestamp}_{body[:20]}"
+                    if sig in seen_signatures:
+                        continue
+                    seen_signatures.add(sig)
+
                     winners_found.append({
                         "phone": msg_phone or "Unknown",
                         "sender": sender,
@@ -150,9 +155,9 @@ def check_winners_on_panels(panel_urls, target_numbers=None):
     return winners_found
 
 def main():
-    print("=" * 60)
-    print("🏆 Cremica Winner Finder & SMS Scraper Engine")
-    print("=" * 60)
+    print("=" * 65)
+    print("🏆 Cremica Bector Foods Promo - Winner Finder & SMS Scraper")
+    print("=" * 65)
 
     target_numbers = extract_registered_numbers(RESULTS_FILE)
     print(f"Loaded {len(target_numbers)} registered number(s) from {RESULTS_FILE}")
@@ -184,23 +189,24 @@ def main():
 
     winners = check_winners_on_panels(panel_urls, target_numbers=target_numbers if target_numbers else None)
 
-    print("\n" + "=" * 60)
-    print(f"🎉 SCAN COMPLETE! Total Winner Messages Found: {len(winners)}")
-    print("=" * 60)
+    print("\n" + "=" * 65)
+    print(f"🎉 SCAN COMPLETE! Total Cremica Winners Found: {len(winners)}")
+    print("=" * 65)
 
     if winners:
         report_lines = []
         report_lines.append("=" * 80)
-        report_lines.append("                   CREMICA CAMPAIGN WINNERS REPORT")
+        report_lines.append("                CREMICA BECTOR FOODS PROMO - WINNERS REPORT")
         report_lines.append("=" * 80)
         report_lines.append(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        report_lines.append(f"Total Winner Messages: {len(winners)}\n")
+        report_lines.append(f"Total Winners Found: {len(winners)}\n")
 
         for idx, w in enumerate(winners, 1):
             line = (
                 f"{idx}. Phone: {w['phone']}\n"
                 f"   Sender: {w['sender']} | Time: {w['timestamp']}\n"
                 f"   Message: {w['message']}\n"
+                f"   Claim Link: https://cremicabacktoschool.woohoo.in/redemption\n"
                 f"   Panel: {w['panel']}\n"
             )
             print(line)
@@ -211,7 +217,7 @@ def main():
 
         print(f"📄 Winner details saved to: {WINNERS_FILE}")
     else:
-        print("ℹ️ No winner messages found yet for registered numbers. Check back after winner announcements!")
+        print("ℹ️ No Cremica winner messages found yet for registered numbers.")
 
 if __name__ == "__main__":
     main()
