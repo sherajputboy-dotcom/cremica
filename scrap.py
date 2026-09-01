@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Cremica Campaign - Registered Numbers Winner Finder & SMS Scraper.
-Scans Firebase panels and checks messages for registered numbers to find winning SMS notifications.
+Cremica Campaign - Today's Winner Finder & SMS Scraper.
+Scans Firebase panels concurrently and checks for TODAY'S winner SMS notifications.
 """
 
 import sys
@@ -13,6 +13,7 @@ import requests
 import base64
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Fix Windows console UTF-8 output encoding
 if sys.platform == "win32":
@@ -24,12 +25,14 @@ if sys.platform == "win32":
 
 RESULTS_FILE = "cremica_results.txt"
 PANELS_FILE = "panels.txt"
-WINNERS_FILE = "cremica_winners.txt"
+WINNERS_FILE = "cremica_todays_winners.txt"
 
 # Keywords for Cremica Bector Foods Promo Winners
 CREMICA_KEYWORDS = [
     "bector foods", "back to school promo", "cremica", "woohoo.in/redemption", "pinelabs", "bourbonsupport"
 ]
+
+TODAY_DATE_STR = datetime.now().strftime("%Y-%m-%d")
 
 def parse_firebase_link(link: str):
     if not link:
@@ -75,92 +78,126 @@ def fetch_panel_data(panel_url):
     messages = {}
     try:
         url = panel_url.rstrip("/") + "/messages.json"
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=8)
         if resp.status_code == 200:
             messages = resp.json() or {}
     except Exception as e:
-        print(f"  [WARN] Error reading panel {panel_url}: {e}")
-    return messages
+        pass
+    return panel_url, messages
 
-def check_winners_on_panels(panel_urls, target_numbers=None):
-    print(f"\n🔍 Scanning {len(panel_urls)} Firebase panel(s) for Cremica Winner SMS...")
-    if target_numbers:
-        print(f"📌 Checking across {len(target_numbers)} registered number(s).")
-    else:
-        print("📌 Checking ALL messages across panels for Cremica Winner SMS.")
+def scan_single_panel(panel_url, target_numbers=None, filter_today=True):
+    panel_url, messages_data = fetch_panel_data(panel_url)
+    if not isinstance(messages_data, dict) or not messages_data:
+        return []
 
     winners_found = []
     seen_signatures = set()
 
-    for idx, panel_url in enumerate(panel_urls, 1):
-        print(f"\nScanning Panel ({idx}/{len(panel_urls)}): {panel_url}")
-        messages_data = fetch_panel_data(panel_url)
-        if not isinstance(messages_data, dict) or not messages_data:
-            print("  [WARN] No messages found or panel unreachable.")
+    for client_id, device_msgs in messages_data.items():
+        if not isinstance(device_msgs, dict):
             continue
 
-        for client_id, device_msgs in messages_data.items():
-            if not isinstance(device_msgs, dict):
+        phone_found = None
+        for m in device_msgs.values():
+            if isinstance(m, dict):
+                text = str(m.get("body") or m.get("message") or m.get("text") or "")
+                m_phone = re.search(r"\b([6-9]\d{9})\b", text)
+                if m_phone:
+                    phone_found = m_phone.group(1)
+                    break
+
+        for msg_id, mdata in device_msgs.items():
+            if not isinstance(mdata, dict):
+                continue
+            body = str(mdata.get("body") or mdata.get("message") or mdata.get("text") or "")
+            if not body:
                 continue
 
-            phone_found = None
-            for m in device_msgs.values():
-                if isinstance(m, dict):
-                    text = str(m.get("body") or m.get("message") or m.get("text") or "")
-                    m_phone = re.search(r"\b([6-9]\d{9})\b", text)
-                    if m_phone:
-                        phone_found = m_phone.group(1)
-                        break
+            lower_body = body.lower()
+            is_cremica_winner = any(kw in lower_body for kw in CREMICA_KEYWORDS)
 
-            for msg_id, mdata in device_msgs.items():
-                if not isinstance(mdata, dict):
-                    continue
-                body = str(mdata.get("body") or mdata.get("message") or mdata.get("text") or "")
-                if not body:
+            if is_cremica_winner:
+                msg_phone = phone_found
+                phone_match = re.search(r"\b([6-9]\d{9})\b", body)
+                if phone_match:
+                    msg_phone = phone_match.group(1)
+
+                if target_numbers and msg_phone and msg_phone not in target_numbers:
                     continue
 
-                lower_body = body.lower()
-                is_cremica_winner = any(kw in lower_body for kw in CREMICA_KEYWORDS)
+                sender = str(mdata.get("sender") or mdata.get("address") or mdata.get("from") or "Unknown")
+                timestamp_str = "Unknown"
+                date_str = ""
+                try:
+                    ts = int(msg_id) / 1000
+                    dt = datetime.fromtimestamp(ts)
+                    timestamp_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    date_str = dt.strftime("%Y-%m-%d")
+                except Exception:
+                    pass
 
-                if is_cremica_winner:
-                    msg_phone = phone_found
-                    phone_match = re.search(r"\b([6-9]\d{9})\b", body)
-                    if phone_match:
-                        msg_phone = phone_match.group(1)
+                # Filter ONLY FOR TODAY'S DATE if filter_today is enabled
+                if filter_today and date_str and date_str != TODAY_DATE_STR:
+                    continue
 
-                    if target_numbers and msg_phone and msg_phone not in target_numbers:
-                        continue
+                sig = f"{msg_phone}_{timestamp_str}_{body[:20]}"
+                if sig in seen_signatures:
+                    continue
+                seen_signatures.add(sig)
 
-                    sender = str(mdata.get("sender") or mdata.get("address") or mdata.get("from") or "Unknown")
-                    timestamp = "Unknown"
-                    try:
-                        ts = int(msg_id) / 1000
-                        timestamp = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        pass
-
-                    sig = f"{msg_phone}_{timestamp}_{body[:20]}"
-                    if sig in seen_signatures:
-                        continue
-                    seen_signatures.add(sig)
-
-                    winners_found.append({
-                        "phone": msg_phone or "Unknown",
-                        "sender": sender,
-                        "message": body,
-                        "timestamp": timestamp,
-                        "panel": panel_url
-                    })
+                winners_found.append({
+                    "phone": msg_phone or "Unknown",
+                    "sender": sender,
+                    "message": body,
+                    "timestamp": timestamp_str,
+                    "date": date_str,
+                    "panel": panel_url
+                })
 
     return winners_found
 
+def check_all_panels_parallel(panel_urls, target_numbers=None, filter_today=True, max_workers=20):
+    print(f"\n🔄 Parallel Scanning {len(panel_urls)} Firebase panel(s) with {max_workers} worker(s)...")
+    print(f"📅 Filter Mode: ONLY TODAY'S DATE ({TODAY_DATE_STR})")
+    if target_numbers:
+        print(f"📌 Target Filter: {len(target_numbers)} registered number(s) from {RESULTS_FILE}")
+    else:
+        print("📌 Target Filter: Scanning all phone numbers across panels.")
+
+    all_winners = []
+    completed = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_url = {
+            executor.submit(scan_single_panel, url, target_numbers, filter_today): url
+            for url in panel_urls
+        }
+
+        for future in as_completed(future_to_url):
+            completed += 1
+            url = future_to_url[future]
+            try:
+                w_list = future.result()
+                if w_list:
+                    print(f"  [{completed}/{len(panel_urls)}] 🎉 Found {len(w_list)} winner message(s) on: {url}")
+                    all_winners.extend(w_list)
+                else:
+                    print(f"  [{completed}/{len(panel_urls)}] Checked: {url[:55]}...")
+            except Exception as e:
+                print(f"  [{completed}/{len(panel_urls)}] [WARN] {url[:40]}: {e}")
+
+    return all_winners
+
 def main():
-    print("=" * 65)
-    print("🏆 Cremica Bector Foods Promo - Winner Finder & SMS Scraper")
-    print("=" * 65)
+    print("=" * 70)
+    print(f"🏆 Cremica Bector Foods Promo - TODAY'S Winner Finder ({TODAY_DATE_STR})")
+    print("=" * 70)
 
     target_numbers = extract_registered_numbers(RESULTS_FILE)
-    print(f"Loaded {len(target_numbers)} registered number(s) from {RESULTS_FILE}")
+    if target_numbers:
+        print(f"Loaded {len(target_numbers)} registered number(s) from {RESULTS_FILE}")
+    else:
+        print("No cremica_results.txt found, checking all panel numbers.")
 
     panel_urls = []
     if os.path.exists(PANELS_FILE):
@@ -171,35 +208,22 @@ def main():
                     panel_urls.append(parsed)
 
     if not panel_urls:
-        source = input("\nEnter path to panels.txt or paste Firebase URL: ").strip()
-        if os.path.exists(source):
-            with open(source, "r", encoding="utf-8") as f:
-                for line in f:
-                    parsed = parse_firebase_link(line)
-                    if parsed:
-                        panel_urls.append(parsed)
-        else:
-            parsed = parse_firebase_link(source)
-            if parsed:
-                panel_urls.append(parsed)
-
-    if not panel_urls:
-        print("❌ No valid Firebase URLs provided.")
+        print("❌ No valid Firebase URLs found in panels.txt.")
         return
 
-    winners = check_winners_on_panels(panel_urls, target_numbers=target_numbers if target_numbers else None)
+    winners = check_all_panels_parallel(panel_urls, target_numbers=target_numbers if target_numbers else None, filter_today=True)
 
-    print("\n" + "=" * 65)
-    print(f"🎉 SCAN COMPLETE! Total Cremica Winners Found: {len(winners)}")
-    print("=" * 65)
+    print("\n" + "=" * 70)
+    print(f"🎉 SCAN COMPLETE! Total TODAY's ({TODAY_DATE_STR}) Cremica Winners: {len(winners)}")
+    print("=" * 70)
 
     if winners:
         report_lines = []
         report_lines.append("=" * 80)
-        report_lines.append("                CREMICA BECTOR FOODS PROMO - WINNERS REPORT")
+        report_lines.append(f"          CREMICA BECTOR FOODS PROMO - TODAY'S WINNERS ({TODAY_DATE_STR})")
         report_lines.append("=" * 80)
-        report_lines.append(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        report_lines.append(f"Total Winners Found: {len(winners)}\n")
+        report_lines.append(f"Scan Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report_lines.append(f"Total Winners Found Today: {len(winners)}\n")
 
         for idx, w in enumerate(winners, 1):
             line = (
@@ -215,9 +239,9 @@ def main():
         with open(WINNERS_FILE, "w", encoding="utf-8") as f:
             f.write("\n".join(report_lines))
 
-        print(f"📄 Winner details saved to: {WINNERS_FILE}")
+        print(f"📄 Today's winner details saved to: {WINNERS_FILE}")
     else:
-        print("ℹ️ No Cremica winner messages found yet for registered numbers.")
+        print(f"ℹ️ No Cremica winner messages found for TODAY ({TODAY_DATE_STR}). Check back later after winner announcements!")
 
 if __name__ == "__main__":
     main()
