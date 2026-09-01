@@ -116,12 +116,12 @@ def main():
     initial_msgs = fetch_direct_device_messages(panel_url, client_id)
 
     print("=" * 70)
-    print(f"📩 MESSAGES FOR {clean_phone} ({len(initial_msgs)} found):")
+    print(f"📩 LATEST 3 MESSAGES FOR {clean_phone}:")
     print("=" * 70)
 
     seen_ids = set()
     if initial_msgs:
-        for idx, m in enumerate(initial_msgs[:10], 1):
+        for idx, m in enumerate(initial_msgs[:3], 1):
             seen_ids.add(m["msg_id"])
             print(f"{idx:02d}. [🔑 OTP: {m['otp']}] | Time: {m['time']} | Sender: {m['sender']}")
             print(f"    Message: {m['body']}")
