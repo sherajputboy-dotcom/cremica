@@ -373,13 +373,24 @@ def write_summary_report(results, batch_code="CD06G26", log_file=LOG_FILE):
     lines.append("=" * 80)
     lines.append(f"✅ SUCCESSFUL REGISTRATIONS ({len(successes)})")
     lines.append("=" * 80)
+    
+    succ_json_list = []
     if successes:
         for idx, item in enumerate(successes, 1):
             phone = item.get("phone", "")
             name = item.get("name", "")
             state = item.get("state", "")
             details = item.get("details", "Complete")
-            lines.append(f"{idx}. Phone: {phone} | Name: {name} | State: {state} | Details: {details}")
+            fb_url = item.get("firebase_url") or item.get("panel_url") or "N/A"
+            cid = item.get("client_id") or "N/A"
+            lines.append(f"{idx}. Phone: {phone} | Panel: {fb_url} | Device ID: {cid} | Name: {name} | Details: {details}")
+            succ_json_list.append({
+                "phone": phone,
+                "panel_url": fb_url,
+                "client_id": cid,
+                "name": name,
+                "timestamp": timestamp
+            })
     else:
         lines.append("No successful registrations in this run.")
 
@@ -404,6 +415,26 @@ def write_summary_report(results, batch_code="CD06G26", log_file=LOG_FILE):
     with _log_lock:
         with open(log_file, "w", encoding="utf-8") as fh:
             fh.write(content)
+
+        # Also write/append to successful_participated_devices.json
+        if succ_json_list:
+            json_file = "successful_participated_devices.json"
+            existing = []
+            if os.path.exists(json_file):
+                try:
+                    with open(json_file, "r", encoding="utf-8") as jf:
+                        existing = json.load(jf)
+                except Exception:
+                    existing = []
+            
+            phone_set = {x.get("phone") for x in existing if isinstance(x, dict)}
+            for sitem in succ_json_list:
+                if sitem["phone"] not in phone_set:
+                    existing.append(sitem)
+                    phone_set.add(sitem["phone"])
+
+            with open(json_file, "w", encoding="utf-8") as jf:
+                json.dump(existing, jf, indent=2)
 
     return content
 
