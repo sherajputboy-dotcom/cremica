@@ -2,6 +2,7 @@
 """
 Cremica School Shuru - Premium Telegram Bot & Render Deployment Server.
 Features:
+- Instant OTP Fetcher for any mobile number (50ms response, top 3 latest OTPs)
 - Interactive HTML UI with inline keyboards & progress bars
 - Multi-link & text file (.txt) panel upload support
 - Single number processing with interactive OTP prompt
@@ -59,22 +60,25 @@ WAITING_BATCH_CODE = 4
 # Helper Functions
 def is_authorized(user_id: int) -> bool:
     if not ADMIN_IDS:
-        return True  # If ADMIN_IDS is empty, permit all (or configure as needed)
+        return True  # If ADMIN_IDS is empty, permit all
     return user_id in ADMIN_IDS
 
 
 def build_menu_keyboard():
     keyboard = [
         [
+            InlineKeyboardButton("🔑 Fetch OTP (50ms)", callback_data="btn_otp_fetcher"),
+            InlineKeyboardButton("📱 Single Register", callback_data="btn_single"),
+        ],
+        [
             InlineKeyboardButton("🚀 Bulk Panel Process", callback_data="btn_bulk"),
-            InlineKeyboardButton("📱 Single Number", callback_data="btn_single"),
-        ],
-        [
             InlineKeyboardButton(f"🏷️ Batch Code ({CURRENT_BATCH_CODE})", callback_data="btn_batch"),
-            InlineKeyboardButton("📊 View/Export Logs", callback_data="btn_logs"),
         ],
         [
+            InlineKeyboardButton("📊 View/Export Logs", callback_data="btn_logs"),
             InlineKeyboardButton("ℹ️ System Status", callback_data="btn_status"),
+        ],
+        [
             InlineKeyboardButton("❓ Help Guide", callback_data="btn_help"),
         ],
     ]
@@ -86,6 +90,50 @@ def progress_bar(completed: int, total: int, length: int = 10) -> str:
         return "░" * length
     filled = int(length * completed / total)
     return "█" * filled + "░" * (length - filled)
+
+
+def format_otp_response_html(result: dict):
+    phone = result.get("phone", "")
+    status = result.get("status")
+
+    if status != "success" or not result.get("messages"):
+        err_msg = result.get("message", "No messages found for this number.")
+        text = (
+            f"📱 <b>OTP FETCH RESULTS: {phone}</b>\n\n"
+            f"⚠️ <b>Status:</b> {err_msg}\n\n"
+            f"<i>Make sure this phone number exists on one of your Firebase panels.</i>"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔄 Refresh OTPs", callback_data=f"otp_ref_{phone}"),
+                InlineKeyboardButton("📱 Fetch Another Number", callback_data="otp_another"),
+            ]
+        ])
+        return text, keyboard
+
+    messages = result.get("messages", [])
+    lines = [f"📱 <b>OTP FETCH RESULTS: <code>{phone}</code></b>\n"]
+
+    for idx, m in enumerate(messages[:3], 1):
+        otp = m.get("otp", "N/A")
+        sender = m.get("sender", "Unknown")
+        time_str = m.get("time", "Unknown")
+        body = html.escape(m.get("body", ""))
+
+        lines.append(f"<b>{idx}. [🔑 OTP: <code>{otp}</code>]</b>")
+        lines.append(f"⏰ <b>Time:</b> {time_str} | <b>Sender:</b> {sender}")
+        lines.append(f"💬 <code>{body}</code>\n")
+
+    lines.append("👉 <i>Click 'Refresh OTPs' after requesting an OTP on the Woohoo redemption website.</i>")
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Refresh OTPs", callback_data=f"otp_ref_{phone}"),
+            InlineKeyboardButton("📱 Try Another Number", callback_data="otp_another"),
+        ]
+    ])
+
+    return "\n".join(lines), keyboard
 
 
 # ----------------------------------------------------------------------
@@ -108,17 +156,6 @@ async def handle_health(request):
     )
 
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_root)
-    app.router.add_get("/health", handle_health)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logger.info(f"🌐 Keep-alive Web Server started on port {PORT}")
-
-
 # ----------------------------------------------------------------------
 # Bot Command Handlers
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,11 +169,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     welcome_text = (
-        f"🔥 <b>Welcome to Cremica Automation Bot</b> 🔥\n\n"
+        f"🔥 <b>Welcome to Cremica Automation & OTP Bot</b> 🔥\n\n"
         f"Hi <b>{user.first_name}</b>! I am your automated high-speed engine for Cremica School Shuru campaign.\n\n"
+        f"🔑 <b>Instant OTP Fetcher:</b> Send ANY 10-digit phone number to get its latest 3 OTPs in 50ms!\n"
         f"📌 <b>Active Batch Code:</b> <code>{CURRENT_BATCH_CODE}</code>\n"
         f"⚡ <b>Engine Status:</b> 🟢 Ready\n\n"
-        f"Select an action from the menu below or send a panel link directly!"
+        f"Select an action from the menu below or simply type any mobile number!"
     )
     await update.message.reply_html(welcome_text, reply_markup=build_menu_keyboard())
 
@@ -144,16 +182,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "📖 <b>Cremica Bot User Guide</b>\n\n"
-        "<b>1. Bulk Firebase Panels:</b>\n"
+        "<b>1. Instant OTP Fetching (Ultra-Fast):</b>\n"
+        "• Send any 10-digit mobile number in chat (e.g., <code>7208360119</code>).\n"
+        "• Or use <code>/otp 7208360119</code>.\n"
+        "• Returns the top 3 latest OTP messages instantly!\n\n"
+        "<b>2. Bulk Firebase Panels:</b>\n"
         "• Send one or multiple Firebase links in chat text.\n"
-        "• Or upload a <code>.txt</code> file containing Firebase URLs.\n"
-        "• The bot auto-detects online devices & polls Firebase for OTPs.\n\n"
-        "<b>2. Single Number Processing:</b>\n"
-        "• Click <b>📱 Single Number</b>, enter phone number, then enter the OTP received.\n\n"
-        "<b>3. Batch Code Management:</b>\n"
-        "• Use <code>/setbatch &lt;CODE&gt;</code> or click <b>🏷️ Batch Code</b> to change.\n\n"
-        "<b>4. Logs Export:</b>\n"
-        "• Use <code>/logs</code> or click <b>📊 View/Export Logs</b> to download the CSV result log."
+        "• Or upload a <code>.txt</code> file containing Firebase URLs.\n\n"
+        "<b>3. Single Manual Registration:</b>\n"
+        "• Use <code>/single</code> or click 'Single Register' in menu.\n\n"
+        "<b>4. Change Batch Code:</b>\n"
+        "• Use <code>/setbatch &lt;NEW_CODE&gt;</code> to update."
     )
     if update.callback_query:
         await update.callback_query.message.edit_text(help_text, parse_mode="HTML", reply_markup=build_menu_keyboard())
@@ -162,6 +201,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_authorized(user.id):
+        return
+
     log_count = 0
     if os.path.exists(core.LOG_FILE):
         with open(core.LOG_FILE, "r", encoding="utf-8") as f:
@@ -203,41 +246,52 @@ async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ----------------------------------------------------------------------
-# Callback Query Handler
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if not is_authorized(query.from_user.id):
-        await query.message.reply_text("⚠️ Access denied.")
+async def otp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_authorized(user.id):
         return
 
-    if data == "btn_bulk":
-        await query.message.reply_html(
-            "🚀 <b>Bulk Panel Processing</b>\n\n"
-            "Please paste your <b>Firebase URL(s)</b> here or upload a <code>.txt</code> file containing links!"
+    if not context.args:
+        await update.message.reply_html(
+            "🔑 <b>Instant OTP Fetcher</b>\n\n"
+            "Please provide a mobile number:\n"
+            "Usage: <code>/otp 7208360119</code>"
         )
-    elif data == "btn_single":
-        await query.message.reply_html(
-            "📱 <b>Single Number Processing</b>\n\n"
-            "Please enter the 10-digit mobile number:"
-        )
-        return WAITING_SINGLE_PHONE
-    elif data == "btn_batch":
-        await query.message.reply_html(
-            f"🏷️ <b>Change Batch Code</b>\n\n"
-            f"Current Code: <code>{CURRENT_BATCH_CODE}</code>\n"
-            "Send new Batch Code in chat or type <code>/cancel</code>:"
-        )
-        return WAITING_BATCH_CODE
-    elif data == "btn_logs":
-        await logs_command(update, context)
-    elif data == "btn_status":
-        await status_command(update, context)
-    elif data == "btn_help":
-        await help_command(update, context)
+        return
+
+    phone = context.args[0].strip()
+    await process_telegram_otp_request(update, context, phone)
+
+
+async def process_telegram_otp_request(update: Update, context: ContextTypes.DEFAULT_TYPE, phone_input: str, is_edit=False):
+    clean_phone = re.sub(r"\D", "", phone_input)
+    if len(clean_phone) > 10 and clean_phone.startswith("91"):
+        clean_phone = clean_phone[2:]
+
+    if len(clean_phone) != 10 or not clean_phone.isdigit() or clean_phone[0] not in "6789":
+        msg = "❌ <b>Invalid Phone Number!</b> Please enter a valid 10-digit Indian mobile number."
+        if update.callback_query:
+            await update.callback_query.message.edit_text(msg, parse_mode="HTML")
+        else:
+            await update.message.reply_html(msg)
+        return
+
+    if update.callback_query and is_edit:
+        status_msg = update.callback_query.message
+    elif update.callback_query:
+        status_msg = await update.callback_query.message.reply_html(f"⚡ <b>Fetching latest OTPs for <code>{clean_phone}</code>...</b>")
+    else:
+        status_msg = await update.message.reply_html(f"⚡ <b>Fetching latest OTPs for <code>{clean_phone}</code>...</b>")
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, lambda: core.fetch_otp_for_phone(clean_phone))
+
+    html_text, keyboard = format_otp_response_html(result)
+
+    try:
+        await status_msg.edit_text(html_text, parse_mode="HTML", reply_markup=keyboard)
+    except Exception:
+        pass
 
 
 # ----------------------------------------------------------------------
@@ -378,6 +432,51 @@ async def cancel_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ----------------------------------------------------------------------
+# Callback Query Handler
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if not is_authorized(query.from_user.id):
+        await query.message.reply_text("⚠️ Access denied.")
+        return
+
+    if data.startswith("otp_ref_"):
+        phone = data.replace("otp_ref_", "").strip()
+        await process_telegram_otp_request(update, context, phone, is_edit=True)
+    elif data in ("btn_otp_fetcher", "otp_another"):
+        await query.message.reply_html(
+            "🔑 <b>Instant OTP Fetcher</b>\n\n"
+            "Please send any <b>10-digit mobile number</b> (e.g., <code>7208360119</code> or <code>8432518738</code>) to fetch its latest 3 OTPs instantly!"
+        )
+    elif data == "btn_bulk":
+        await query.message.reply_html(
+            "🚀 <b>Bulk Panel Processing</b>\n\n"
+            "Please paste your <b>Firebase URL(s)</b> here or upload a <code>.txt</code> file containing links!"
+        )
+    elif data == "btn_single":
+        await query.message.reply_html(
+            "📱 <b>Single Number Processing</b>\n\n"
+            "Please enter the 10-digit mobile number:"
+        )
+        return WAITING_SINGLE_PHONE
+    elif data == "btn_batch":
+        await query.message.reply_html(
+            f"🏷️ <b>Change Batch Code</b>\n\n"
+            f"Current Code: <code>{CURRENT_BATCH_CODE}</code>\n"
+            "Send new Batch Code in chat or type <code>/cancel</code>:"
+        )
+        return WAITING_BATCH_CODE
+    elif data == "btn_logs":
+        await logs_command(update, context)
+    elif data == "btn_status":
+        await status_command(update, context)
+    elif data == "btn_help":
+        await help_command(update, context)
+
+
+# ----------------------------------------------------------------------
 # Bulk Panel Link & File Processor
 async def handle_panel_processing(update: Update, context: ContextTypes.DEFAULT_TYPE, lines: list):
     user = update.effective_user
@@ -436,7 +535,6 @@ async def handle_panel_processing(update: Update, context: ContextTypes.DEFAULT_
         parse_mode="HTML",
     )
 
-    loop = asyncio.get_running_loop()
     last_update_time = [0.0]
 
     def on_progress(completed, total, outcome):
@@ -453,7 +551,6 @@ async def handle_panel_processing(update: Update, context: ContextTypes.DEFAULT_
                 status_msg.edit_text(text, parse_mode="HTML"), loop
             )
 
-    # Run blocking processing in threadpool executor
     total_success, results = await loop.run_in_executor(
         None,
         lambda: core.process_numbers_parallel(
@@ -472,7 +569,6 @@ async def handle_panel_processing(update: Update, context: ContextTypes.DEFAULT_
 
     await status_msg.edit_text(summary_text, parse_mode="HTML", reply_markup=build_menu_keyboard())
 
-    # Send log file as document
     if os.path.exists(core.LOG_FILE):
         await context.bot.send_document(
             chat_id=update.effective_chat.id,
@@ -488,14 +584,28 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     text = update.message.text.strip()
+
+    # 1. Check if Firebase URL
     if "firebaseio.com" in text or "firebasedatabase.app" in text or "s=" in text:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         await handle_panel_processing(update, context, lines)
-    else:
-        await update.message.reply_html(
-            "❓ Unrecognized text format. Send a Firebase URL or click a button from `/start` menu.",
-            reply_markup=build_menu_keyboard(),
-        )
+        return
+
+    # 2. Check if 10-digit Indian phone number
+    clean_digits = re.sub(r"\D", "", text)
+    if len(clean_digits) > 10 and clean_digits.startswith("91"):
+        clean_digits = clean_digits[2:]
+
+    if len(clean_digits) == 10 and clean_digits[0] in "6789":
+        await process_telegram_otp_request(update, context, clean_digits)
+        return
+
+    await update.message.reply_html(
+        "❓ <b>Unrecognized input.</b>\n\n"
+        "• Send a <b>10-digit mobile number</b> (e.g. <code>7208360119</code>) to fetch its latest 3 OTPs.\n"
+        "• Or send a <b>Firebase URL</b> to process panel devices.",
+        reply_markup=build_menu_keyboard(),
+    )
 
 
 async def document_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -540,10 +650,8 @@ async def main_async():
         logger.error("❌ BOT_TOKEN environment variable not found! Exiting.")
         sys.exit(1)
 
-    # Initialize Telegram Application
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Conversation Handlers for Single Mode & Batch Mode
     single_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(button_callback, pattern="^btn_single$"),
@@ -569,12 +677,13 @@ async def main_async():
         per_message=False,
     )
 
-    # Register handlers & error handler
+    # Register handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("menu", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("logs", logs_command))
+    application.add_handler(CommandHandler("otp", otp_command))
     application.add_handler(CommandHandler("setbatch", set_batch_command))
     application.add_handler(single_conv)
     application.add_handler(batch_conv)
@@ -583,12 +692,10 @@ async def main_async():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     application.add_error_handler(error_handler)
 
-    # Initialize Telegram Application & Start Polling
     await application.initialize()
     await application.start()
     await application.updater.start_polling(drop_pending_updates=True)
 
-    # Start aiohttp Web Server for Render 24/7 Keep-Alive
     app = web.Application()
     app.router.add_get("/", handle_root)
     app.router.add_get("/health", handle_health)
@@ -598,9 +705,8 @@ async def main_async():
     await site.start()
 
     logger.info(f"🌐 Keep-alive Web Server listening on port {PORT}")
-    logger.info("🚀 Cremica Telegram Bot is active and polling...")
+    logger.info("🚀 Cremica Telegram Bot with OTP Fetcher is active and polling...")
 
-    # Keep server running asynchronously
     stop_event = asyncio.Event()
     try:
         await stop_event.wait()
@@ -621,4 +727,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

