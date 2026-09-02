@@ -99,20 +99,23 @@ def format_otp_response_html(result: dict):
     if status != "success" or not result.get("messages"):
         err_msg = result.get("message", "No messages found for this number.")
         text = (
-            f"📱 <b>OTP FETCH RESULTS: {phone}</b>\n\n"
+            f"📱 <b>ASSIGNED NUMBER: <code>{phone}</code></b>\n\n"
             f"⚠️ <b>Status:</b> {err_msg}\n\n"
             f"<i>Make sure this phone number exists on one of your Firebase panels.</i>"
         )
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("🔄 Refresh OTPs", callback_data=f"otp_ref_{phone}"),
-                InlineKeyboardButton("📱 Fetch Another Number", callback_data="otp_another"),
+                InlineKeyboardButton("🆕 Assign Next Number", callback_data="btn_assign_next"),
+            ],
+            [
+                InlineKeyboardButton("📱 Specific Number", callback_data="otp_another"),
             ]
         ])
         return text, keyboard
 
     messages = result.get("messages", [])
-    lines = [f"📱 <b>OTP FETCH RESULTS: <code>{phone}</code></b>\n"]
+    lines = [f"📱 <b>ASSIGNED NUMBER: <code>{phone}</code></b>\n"]
 
     for idx, m in enumerate(messages[:3], 1):
         otp = m.get("otp", "N/A")
@@ -129,7 +132,10 @@ def format_otp_response_html(result: dict):
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔄 Refresh OTPs", callback_data=f"otp_ref_{phone}"),
-            InlineKeyboardButton("📱 Try Another Number", callback_data="otp_another"),
+            InlineKeyboardButton("🆕 Assign Next Number", callback_data="btn_assign_next"),
+        ],
+        [
+            InlineKeyboardButton("📱 Specific Number", callback_data="otp_another"),
         ]
     ])
 
@@ -442,7 +448,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("⚠️ Access denied.")
         return
 
-    if data.startswith("otp_ref_"):
+    if data == "btn_assign_next":
+        user_id = query.from_user.id
+        next_phone = core.get_next_assigned_phone(user_id)
+        if not next_phone:
+            await query.message.reply_html("⚠️ <b>No unassigned numbers found in index!</b>")
+        else:
+            await process_telegram_otp_request(update, context, next_phone, is_edit=False)
+    elif data.startswith("otp_ref_"):
         phone = data.replace("otp_ref_", "").strip()
         await process_telegram_otp_request(update, context, phone, is_edit=True)
     elif data in ("btn_otp_fetcher", "otp_another"):

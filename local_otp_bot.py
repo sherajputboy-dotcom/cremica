@@ -50,20 +50,23 @@ def format_otp_html(result: dict):
     if status != "success" or not result.get("messages"):
         err_msg = result.get("message", "No messages found for this number.")
         text = (
-            f"📱 <b>OTP FETCH RESULTS: <code>{phone}</code></b>\n\n"
+            f"📱 <b>ASSIGNED NUMBER: <code>{phone}</code></b>\n\n"
             f"⚠️ <b>Status:</b> {err_msg}\n\n"
             f"<i>Make sure this phone number is connected on your Firebase panels.</i>"
         )
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("🔄 Refresh OTPs", callback_data=f"ref_{phone}"),
-                InlineKeyboardButton("📱 Try Another Number", callback_data="btn_another"),
+                InlineKeyboardButton("🆕 Assign Next Number", callback_data="btn_assign_next"),
+            ],
+            [
+                InlineKeyboardButton("📱 Specific Number", callback_data="btn_another"),
             ]
         ])
         return text, keyboard
 
     messages = result.get("messages", [])
-    lines = [f"📱 <b>OTP FETCH RESULTS: <code>{phone}</code></b>\n"]
+    lines = [f"📱 <b>ASSIGNED NUMBER: <code>{phone}</code></b>\n"]
 
     for idx, m in enumerate(messages[:3], 1):
         otp = m.get("otp", "N/A")
@@ -75,12 +78,15 @@ def format_otp_html(result: dict):
         lines.append(f"⏰ <b>Time:</b> {time_str} | <b>Sender:</b> {sender}")
         lines.append(f"💬 <code>{body}</code>\n")
 
-    lines.append("👉 <i>Click 'Refresh OTPs' after requesting an OTP on the redemption website.</i>")
+    lines.append("👉 <i>Click 'Refresh OTPs' after requesting an OTP on the website.</i>")
 
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔄 Refresh OTPs", callback_data=f"ref_{phone}"),
-            InlineKeyboardButton("📱 Try Another Number", callback_data="btn_another"),
+            InlineKeyboardButton("🆕 Assign Next Number", callback_data="btn_assign_next"),
+        ],
+        [
+            InlineKeyboardButton("📱 Specific Number", callback_data="btn_another"),
         ]
     ])
 
@@ -90,14 +96,36 @@ def format_otp_html(result: dict):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     welcome_text = (
-        f"🔥 <b>Instant OTP Fetcher Bot Ready</b> 🔥\n\n"
-        f"Hi <b>{user.first_name}</b>!\n"
-        f"Simply send ANY 10-digit mobile number in chat (e.g. <code>7208360119</code>, <code>7492077040</code>, <code>8432518738</code>).\n\n"
+        f"🔥 <b>Instant OTP Fetcher & Number Assigner Bot</b> 🔥\n\n"
+        f"Hi <b>{user.first_name}</b>!\n\n"
+        f"👉 Click <b>🆕 Assign New Number</b> to get a 100% unique unassigned number sequentially!\n"
+        f"👉 Or simply send ANY 10-digit mobile number in chat (e.g. <code>7208360119</code>, <code>7492077040</code>).\n\n"
         f"⚡ <b>Response Speed:</b> ~50ms Direct Lookup\n"
-        f"📩 <b>Output:</b> Top 3 Latest Messages & OTP Codes\n\n"
-        f"Send a mobile number to fetch OTPs now!"
+        f"📩 <b>Output:</b> Top 3 Latest Messages & OTP Codes"
     )
-    await update.message.reply_html(welcome_text)
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🆕 Assign New Number (Auto)", callback_data="btn_assign_next"),
+        ],
+        [
+            InlineKeyboardButton("📱 Enter Specific Number", callback_data="btn_another"),
+        ]
+    ])
+    await update.message.reply_html(welcome_text, reply_markup=keyboard)
+
+
+async def handle_assign_next_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    next_phone = core.get_next_assigned_phone(user_id)
+    if not next_phone:
+        msg = "⚠️ <b>No unassigned numbers found in index!</b>"
+        if update.callback_query:
+            await update.callback_query.message.edit_text(msg, parse_mode="HTML")
+        else:
+            await update.message.reply_html(msg)
+        return
+
+    await handle_otp_request(update, context, next_phone, is_edit=False)
 
 
 async def handle_otp_request(update: Update, context: ContextTypes.DEFAULT_TYPE, phone_input: str, is_edit=False):
@@ -147,9 +175,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(clean_digits) == 10 and clean_digits[0] in "6789":
         await handle_otp_request(update, context, clean_digits)
     else:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🆕 Assign New Number (Auto)", callback_data="btn_assign_next")]
+        ])
         await update.message.reply_html(
             "📩 <b>Instant OTP Fetcher Bot</b>\n\n"
-            "Please send any <b>10-digit mobile number</b> (e.g., <code>7208360119</code> or <code>7492077040</code>) to fetch its latest 3 OTPs instantly!"
+            "• Send any <b>10-digit mobile number</b> (e.g., <code>7208360119</code>)\n"
+            "• Or click <b>🆕 Assign New Number</b> below to get the next unique number!",
+            reply_markup=keyboard,
         )
 
 
@@ -158,12 +191,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    if data.startswith("ref_"):
+    if data == "btn_assign_next":
+        await handle_assign_next_command(update, context)
+    elif data.startswith("ref_"):
         phone = data.replace("ref_", "").strip()
         await handle_otp_request(update, context, phone, is_edit=True)
     elif data == "btn_another":
         await query.message.reply_html(
-            "📩 <b>Send Another Number</b>\n\n"
+            "📩 <b>Send Specific Number</b>\n\n"
             "Please type or paste any 10-digit mobile number in chat:"
         )
 

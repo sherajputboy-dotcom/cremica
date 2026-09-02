@@ -78,11 +78,32 @@ def fetch_direct_device_messages(panel_url, client_id):
     messages.sort(key=lambda x: (x["ts_val"], str(x["msg_id"])), reverse=True)
     return messages
 
+import fcremica_core as core
+
 def main():
     if len(sys.argv) >= 2:
         phone = sys.argv[1].strip()
     else:
-        phone = input("Enter Phone Number: ").strip()
+        print("=" * 60)
+        print("📱 ULTRA-FAST FIREBASE OTP FETCHER & NUMBER ASSIGNER")
+        print("=" * 60)
+        print("Options:")
+        print("1. Enter specific 10-digit mobile number")
+        print("2. Assign NEW UNIQUE Number (Auto-selects next available number)")
+        print("=" * 60)
+        choice = input("Enter choice (1/2 or Phone Number directly): ").strip()
+        
+        if choice == "2" or choice.lower() in ("n", "next", "new"):
+            next_num = core.get_next_assigned_phone("cli")
+            if not next_num:
+                print("No numbers found in index.")
+                return
+            phone = next_num
+            print(f"👉 Automatically assigned NEW UNIQUE Number: {phone}")
+        elif len(choice) >= 10:
+            phone = choice
+        else:
+            phone = input("Enter Phone Number: ").strip()
 
     clean_phone = "".join(filter(str.isdigit, phone))
     if len(clean_phone) > 10 and clean_phone.startswith("91"):
@@ -104,19 +125,20 @@ def main():
 
     initial_msgs = fetch_direct_device_messages(panel_url, client_id)
 
-    print(f"\nTarget: {clean_phone}")
+    print(f"\n📱 TARGET NUMBER: {clean_phone}")
+    print(f"📡 Panel: {panel_url} | Client ID: {client_id}")
     print(f"Latest 3 Messages:")
-    print("-" * 50)
+    print("=" * 60)
 
     seen_ids = set()
     if initial_msgs:
         for idx, m in enumerate(initial_msgs[:3], 1):
             seen_ids.add(m["msg_id"])
-            print(f"{idx}. OTP: {m['otp']} | Time: {m['time']}")
+            print(f"{idx}. [🔑 OTP: {m['otp']}] | Time: {m['time']} | Sender: {m['sender']}")
             print(f"   Msg: {m['body']}")
-            print("-" * 50)
+            print("-" * 60)
 
-    print("Listening for incoming OTPs (Press Ctrl+C to stop)...")
+    print("Listening for incoming OTPs (Press Ctrl+C for next/stop)...")
 
     try:
         while True:
@@ -129,7 +151,8 @@ def main():
                     print(f"Time: {m['time']} | Sender: {m['sender']}")
                     print(f"Msg: {m['body']}\n")
     except KeyboardInterrupt:
-        pass
+        print("\nStopped monitoring.")
 
 if __name__ == "__main__":
     main()
+

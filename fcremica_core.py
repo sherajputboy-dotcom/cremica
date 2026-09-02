@@ -720,3 +720,59 @@ def fetch_otp_for_phone(phone_input):
 
     return {"status": "error", "message": "Failed to fetch messages", "phone": clean_phone}
 
+
+# ----------------------------------------------------------------------
+# Unique Sequential Phone Assignee Helper
+ASSIGNED_STATE_FILE = "assigned_numbers_state.json"
+
+def get_next_assigned_phone(user_id="default"):
+    device_index_file = "device_index.json"
+    if not os.path.exists(device_index_file):
+        return None
+
+    try:
+        with open(device_index_file, "r", encoding="utf-8") as jf:
+            device_index = json.load(jf)
+    except Exception:
+        return None
+
+    all_phones = sorted(list(device_index.keys()))
+    if not all_phones:
+        return None
+
+    # Load state
+    state_data = {"assigned": [], "user_indices": {}}
+    if os.path.exists(ASSIGNED_STATE_FILE):
+        try:
+            with open(ASSIGNED_STATE_FILE, "r", encoding="utf-8") as sf:
+                state_data = json.load(sf)
+        except Exception:
+            state_data = {"assigned": [], "user_indices": {}}
+
+    assigned_set = set(state_data.get("assigned", []))
+
+    # Find first unassigned phone number
+    next_phone = None
+    for p in all_phones:
+        if p not in assigned_set:
+            next_phone = p
+            break
+
+    if not next_phone:
+        # If all numbers assigned once, cycle back cleanly
+        next_phone = all_phones[0]
+
+    # Save updated state
+    assigned_set.add(next_phone)
+    state_data["assigned"] = list(assigned_set)
+    state_data["user_indices"][str(user_id)] = next_phone
+
+    try:
+        with open(ASSIGNED_STATE_FILE, "w", encoding="utf-8") as sf:
+            json.dump(state_data, sf, indent=2)
+    except Exception:
+        pass
+
+    return next_phone
+
+
